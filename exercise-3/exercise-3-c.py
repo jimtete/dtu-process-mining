@@ -208,90 +208,65 @@ def read_from_file(filename: str) -> Dict[str, List[dict]]:
 
 def alpha(log: Dict[str, List[dict]]) -> PetriNet:
     """
-    Proper Alpha miner algorithm implementation with debugging
+    Proper Alpha miner algorithm implementation
     """
-    print("=== ALPHA MINER DEBUGGING ===")
-    
     # Step 1: Extract all unique activities from the log
     activities = set()
-    for case_id, case_events in log.items():
+    for case_events in log.values():
         for event in case_events:
             activity_name = event.get('concept:name')
             if activity_name:
                 activities.add(activity_name)
     
-    print(f"1. Found {len(activities)} unique activities:")
-    for i, activity in enumerate(sorted(activities)):
-        print(f"   {i+1}. {activity}")
-    
-    # Step 2: Build direct succession relations
+    # Step 2: Build footprint matrix and find relations
     direct_successions = set()
-    for case_id, case_events in log.items():
+    causality = set()
+    parallel = set()
+    unrelated = set()
+    
+    # Find direct succession relations
+    for case_events in log.values():
         events = [e.get('concept:name') for e in case_events if e.get('concept:name')]
-        print(f"\n   Case {case_id}: {events}")
         for i in range(len(events) - 1):
             direct_successions.add((events[i], events[i+1]))
     
-    print(f"\n2. Direct succession relations ({len(direct_successions)} found):")
-    for i, (a, b) in enumerate(sorted(direct_successions)):
-        print(f"   {i+1}. {a} -> {b}")
+    # Build footprint matrix and find relations
+    for a in activities:
+        for b in activities:
+            a_b = (a, b) in direct_successions
+            b_a = (b, a) in direct_successions
+            
+            if a_b and not b_a:
+                causality.add((a, b))  # a -> b
+            elif not a_b and not b_a and a != b:
+                unrelated.add((a, b))  # a # b
+            elif a_b and b_a:
+                parallel.add((a, b))  # a || b
     
     # Step 3: Find start and end activities
     start_activities = set()
     end_activities = set()
     
-    for case_id, case_events in log.items():
+    for case_events in log.values():
         events = [e.get('concept:name') for e in case_events if e.get('concept:name')]
         if events:
             start_activities.add(events[0])
             end_activities.add(events[-1])
     
-    print(f"\n3. Start activities: {sorted(start_activities)}")
-    print(f"   End activities: {sorted(end_activities)}")
+    # Step 4: Find maximal pairs (A, B) where:
+    # - All activities in A are causally related to all activities in B
+    # - Activities within A are unrelated to each other
+    # - Activities within B are unrelated to each other
     
-    # Step 4: Build footprint matrix and find relations
-    causality = set()
-    parallel = set()
-    unrelated = set()
+    # Helper function to check if all activities in set1 are causally related to all in set2
+    def is_causal_pair(set1, set2):
+        for a in set1:
+            for b in set2:
+                if (a, b) not in causality:
+                    return False
+        return True
     
-    print(f"\n4. Footprint matrix analysis:")
-    activities_list = sorted(activities)
-    
-    # Build footprint matrix
-    for a in activities_list:
-        row = []
-        for b in activities_list:
-            a_b = (a, b) in direct_successions
-            b_a = (b, a) in direct_successions
-            
-            if a == b:
-                row.append("◯")  # Diagonal
-            elif a_b and not b_a:
-                causality.add((a, b))
-                row.append("→")
-            elif not a_b and b_a:
-                row.append("←")
-            elif a_b and b_a:
-                parallel.add((a, b))
-                row.append("‖")
-            else:
-                unrelated.add((a, b))
-                row.append("#")
-        
-        # Print row
-        if a == activities_list[0]:
-            print("   " + " ".join([f"{b:>15}" for b in [""] + activities_list]))
-        print("   " + " ".join([f"{a:>15}"] + [f"{cell:>15}" for cell in row]))
-    
-    print(f"\n5. Causality relations (→): {len(causality)} found")
-    for i, (a, b) in enumerate(sorted(causality)):
-        print(f"   {i+1}. {a} → {b}")
-    
-    print(f"\n6. Parallel relations (‖): {len(parallel)} found")
-    for i, (a, b) in enumerate(sorted(parallel)):
-        print(f"   {i+1}. {a} ‖ {b}")
-    
-    # Step 5: Find maximal pairs
+    # Helper function to check if activities in a set are mutually unrelated
     def are_unrelated(activity_set):
         activities_list = list(activity_set)
         for i in range(len(activities_list)):
@@ -301,51 +276,48 @@ def alpha(log: Dict[str, List[dict]]) -> PetriNet:
                     return False
         return True
     
-    def is_causal_pair(set1, set2):
-        for a in set1:
-            for b in set2:
-                if (a, b) not in causality:
-                    return False
-        return True
+    # Find all possible pairs (A, B)
+    maximal_pairs = []
     
-    # Find candidate pairs
+    # Generate candidate A sets (predecessors)
     from itertools import combinations, chain
     
+    # Find all subsets of activities for A and B
     all_activities = list(activities)
-    candidate_pairs = []
+    max_set_size = len(all_activities)  # Use full size to avoid missing larger sets
     
-    # Try different set sizes
-    for size_a in range(1, min(4, len(all_activities))):
-        for size_b in range(1, min(4, len(all_activities))):
-            for combo_a in combinations(all_activities, size_a):
-                for combo_b in combinations(all_activities, size_b):
-                    A = set(combo_a)
-                    B = set(combo_b)
-                    if A != B and are_unrelated(A) and are_unrelated(B) and is_causal_pair(A, B):
-                        candidate_pairs.append((A, B))
+    # Generate candidate A sets (predecessors)
+    candidate_A_sets = []
+    for size in range(1, max_set_size + 1):
+        for combo in combinations(all_activities, size):
+            if are_unrelated(combo):
+                candidate_A_sets.append(set(combo))
     
-    print(f"\n7. Candidate pairs found: {len(candidate_pairs)}")
-    for i, (A, B) in enumerate(candidate_pairs):
-        print(f"   {i+1}. {sorted(A)} → {sorted(B)}")
+    # Generate candidate B sets (successors)  
+    candidate_B_sets = []
+    for size in range(1, max_set_size + 1):
+        for combo in combinations(all_activities, size):
+            if are_unrelated(combo):
+                candidate_B_sets.append(set(combo))
     
-    # Filter to maximal pairs
-    maximal_pairs = []
-    for A, B in candidate_pairs:
+    # Find valid (A, B) pairs where all a->b relations hold
+    for A in candidate_A_sets:
+        for B in candidate_B_sets:
+            if is_causal_pair(A, B):
+                maximal_pairs.append((frozenset(A), frozenset(B)))
+    
+    # Filter to keep only maximal pairs
+    final_pairs = []
+    for A, B in maximal_pairs:
         is_maximal = True
-        for A2, B2 in candidate_pairs:
+        for A2, B2 in maximal_pairs:
             if A != A2 and B != B2 and A.issubset(A2) and B.issubset(B2):
                 is_maximal = False
                 break
         if is_maximal:
-            maximal_pairs.append((A, B))
+            final_pairs.append((A, B))
     
-    print(f"\n8. Maximal pairs: {len(maximal_pairs)}")
-    for i, (A, B) in enumerate(maximal_pairs):
-        print(f"   {i+1}. {sorted(A)} → {sorted(B)}")
-    
-    # Step 6: Build the Petri net
-    print(f"\n9. Building Petri Net structure:")
-    
+    # Step 5: Build the Petri net
     pn = PetriNet()
     
     # Add transitions for all activities
@@ -353,56 +325,39 @@ def alpha(log: Dict[str, List[dict]]) -> PetriNet:
         pn.add_transition(activity, activity)
     
     # Add initial place with one token
-    initial_place = "p_start"
+    initial_place = "start"
     pn.add_place(initial_place)
     pn.add_marking(initial_place)
     
-    print(f"   - Added initial place '{initial_place}' with 1 token")
-    
     # Add final place
-    final_place = "p_end"
+    final_place = "end"
     pn.add_place(final_place)
-    print(f"   - Added final place '{final_place}'")
     
     # Connect initial place to start activities
-    print(f"   - Connecting {initial_place} to start activities: {sorted(start_activities)}")
     for activity in start_activities:
         pn.add_edge(initial_place, activity)
-        print(f"     {initial_place} → {activity}")
     
     # Connect end activities to final place
-    print(f"   - Connecting end activities to {final_place}: {sorted(end_activities)}")
     for activity in end_activities:
         pn.add_edge(activity, final_place)
-        print(f"     {activity} → {final_place}")
     
-    # Add places for each maximal pair
+    # Add places for each maximal pair (A, B)
     place_id = 0
-    for A, B in maximal_pairs:
+    for A, B in final_pairs:
         place_name = f"p{place_id}"
         pn.add_place(place_name)
-        print(f"   - Added place '{place_name}' for pair: {sorted(A)} → {sorted(B)}")
         
         # Connect all activities in A to this place
         for activity in A:
             pn.add_edge(activity, place_name)
-            print(f"     {activity} → {place_name}")
         
         # Connect this place to all activities in B
         for activity in B:
             pn.add_edge(place_name, activity)
-            print(f"     {place_name} → {activity}")
         
         place_id += 1
     
-    print(f"\n10. Final Petri Net Summary:")
-    print(f"   - Places: {len(pn.places)}")
-    print(f"   - Transitions: {len(pn.transitions)}")
-    print(f"   - Edges: {len(pn.edges)}")
-    
-    # Check initial place connections
-    initial_outputs = [target for source, target in pn.edges if source == initial_place]
-    print(f"   - Initial place '{initial_place}' has {len(initial_outputs)} output arcs: {initial_outputs}")
+    # No additional places needed, as maximal pairs cover all causal relations
     
     return pn
 
